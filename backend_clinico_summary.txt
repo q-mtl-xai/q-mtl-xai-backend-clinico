@@ -1,0 +1,21 @@
+======================================================================
+BACKEND CLÍNICO v3 — RESUMEN
+======================================================================
+
+Fecha: 2026-10-24 01:05:01
+Supabase URL: https://osftrgvyrptsxtilgonw.supabase.co
+
+Endpoints implementados:
+  GET  /health
+  POST /auth/register
+  POST /auth/login
+  POST /patients
+  GET  /patients/by-dni/{dni}
+  GET  /patients/{id}/studies
+  POST /studies/analyze
+
+Novedades vs backend v2:
+  + Autenticación JWT + bcrypt
+  + Gestión de pacientes y estudios en Supabase
+  + XAI dinámico (saliency por registro)
+  + Almacenamiento de .npy en Supabase Storage

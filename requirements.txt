@@ -1,0 +1,15 @@
+fastapi==0.115.0
+uvicorn[standard]==0.32.0
+pydantic==2.9.2
+python-multipart==0.0.12
+supabase>=2.10.0
+python-jose[cryptography]==3.3.0
+passlib[bcrypt]==1.7.4
+bcrypt==4.2.0
+numpy==1.26.4
+scipy==1.14.1
+torch==2.5.0
+scikit-learn==1.5.2
+joblib==1.4.2
+captum==0.7.0
+google-genai==1.50.0
