@@ -57,25 +57,26 @@ def _build_rules_explanation(prediction, confidence, sqi, top_timesteps, task):
         accion = "Requiere revisión por especialista en cardiología."
 
     if confidence >= 0.85:
-        conf = f"Confianza alta ({confidence:.1%})"
+        conf = f"alta ({confidence:.1%})"
     elif confidence >= 0.65:
-        conf = f"Confianza moderada ({confidence:.1%})"
+        conf = f"moderada ({confidence:.1%})"
     else:
-        conf = f"Confianza baja ({confidence:.1%}), interpretar con cautela"
+        conf = f"baja ({confidence:.1%}) — interpretar con cautela"
 
     calidad = {
-        "Good": "SQI Good: señal de buena calidad",
-        "Fair": "SQI Fair: señal aceptable, revisar posibles artefactos",
-        "Poor": "SQI Poor: señal de baja calidad, considerar repetir la adquisición",
-    }.get(sqi, f"SQI {sqi}")
+        "Good": "Good — señal de buena calidad",
+        "Fair": "Fair — señal aceptable, revisar posibles artefactos",
+        "Poor": "Poor — señal de baja calidad, considerar repetir adquisición",
+    }.get(sqi, sqi)
 
     return (
-        f"**{hallazgo}** ({conf}). "
-        f"Los instantes con mayor peso según el mapa XAI se ubican al **{ubic}** del registro "
-        f"(t≈{top_s[0]}s, {top_s[1]}s, {top_s[2]}s), coincidiendo con el **{foco}**. "
-        f"{calidad}. **Sugerencia clínica:** {accion} "
+        f"- **Hallazgo:** {hallazgo}\n"
+        f"- **Confianza:** {conf}\n"
+        f"- **Segmento analizado:** {foco} (t≈{top_s[0]}s, {top_s[1]}s, {top_s[2]}s, zona {ubic})\n"
+        f"- **Calidad de señal (SQI):** {calidad}\n"
+        f"- **Sugerencia clínica:** {accion}\n\n"
         f"*Esta es una interpretación asistida generada automáticamente; "
-        f"no constituye un diagnóstico clínico y debe ser validada por un profesional de la salud.*"
+        f"no constituye un diagnóstico clínico.*"
     )
 
 
@@ -92,12 +93,19 @@ Datos del análisis:
 - Calidad de señal (SQI): {sqi}
 - Timesteps con mayor peso XAI (segundos): {top_s}
 
-Instrucciones:
-1. Explicación clínica de 3-4 frases, dirigida a un médico.
-2. Mencioná predicción, confianza, SQI y qué segmento del ECG sustenta la predicción.
-3. Incluí una sugerencia clínica accionable.
-4. NO inventes datos. NO des diagnóstico definitivo.
-5. Terminá con: "Esta es una interpretación asistida generada automáticamente; no constituye un diagnóstico clínico."
+FORMATO DE SALIDA OBLIGATORIO — devolvé EXACTAMENTE 4 bullets con este formato, sin párrafos introductorios ni texto corrido:
+
+- **Hallazgo:** [una línea con la predicción y su interpretación clínica breve]
+- **Confianza:** [alta/moderada/baja + porcentaje, con nota si es <65%]
+- **Segmento analizado:** [qué parte del ECG sustenta la predicción según los timesteps: ST, onda T, QRS, onda P, etc.]
+- **Sugerencia clínica:** [qué debe revisar o correlacionar el médico, 1-2 frases máximo]
+
+Reglas estrictas:
+1. NO escribas párrafos corridos. SOLO los 4 bullets.
+2. NO inventes datos que no estén arriba.
+3. NO des diagnóstico definitivo.
+4. La última línea, separada por una línea en blanco, debe ser exactamente:
+"*Esta es una interpretación asistida generada automáticamente; no constituye un diagnóstico clínico.*"
 """
 
 
