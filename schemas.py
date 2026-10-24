@@ -57,7 +57,6 @@ class StudyResponse(BaseModel):
     latency_ms: float
 
 
-# === NUEVO: explicación con LLM o reglas ===
 class ExplainRequest(BaseModel):
     prediction: str
     confidence: float
@@ -68,4 +67,21 @@ class ExplainRequest(BaseModel):
 
 class ExplainResponse(BaseModel):
     explicacion: str
-    source: str  # "llm" o "rules"
+    source: str
+
+
+# === NUEVO: predicción sin guardar (para sandbox) ===
+class PredictRequest(BaseModel):
+    signal: Union[List[float], List[List[float]]]
+    task: str = "isc"
+    sampling_rate: int = 250
+
+
+class PredictResponse(BaseModel):
+    prediction: str
+    confidence: float
+    probabilities: dict
+    sqi: str
+    saliency: List[float]
+    top_timesteps: List[int]
+    latency_ms: float
