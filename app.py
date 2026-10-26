@@ -25,7 +25,7 @@ from schemas import (
     StudyAnalyzeRequest, StudyResponse,
     ExplainRequest, ExplainResponse,
     PredictRequest, PredictResponse,
-    StudyUpdateRequest, StudyVoidRequest # <-- IMPORTAMOS LOS NUEVOS
+    StudyUpdateRequest, StudyVoidRequest
 )
 
 # === Config ===
@@ -51,7 +51,7 @@ CLASS_NAMES = {
 }
 
 # === App ===
-app = FastAPI(title="Q-MTL-XAI Clinical API", version="3.4.0") # Subimos versión
+app = FastAPI(title="Q-MTL-XAI Clinical API", version="3.5.0") # Subimos versión
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -171,7 +171,7 @@ def list_studies(patient_id: str, doctor=Depends(get_current_doctor)):
     return {"studies": res.data}
 
 
-# ---------- ANÁLISIS CON PERSISTENCIA (GUARDADO FINAL) ----------
+# ---------- ANÁLISIS CON PERSISTENCIA ----------
 @app.post("/studies/analyze", response_model=StudyResponse)
 def analyze_study(req: StudyAnalyzeRequest, doctor=Depends(get_current_doctor)):
     t0 = time.time()
@@ -199,8 +199,8 @@ def analyze_study(req: StudyAnalyzeRequest, doctor=Depends(get_current_doctor)):
         "ai_prediction": result["prediction"],
         "ai_confidence": result["confidence"],
         "sqi_score": result["sqi"],
-        "medical_validation": req.medical_validation, # <-- GUARDAMOS VALIDACIÓN
-        "medical_notes": req.medical_notes,           # <-- GUARDAMOS NOTAS
+        "medical_validation": req.medical_validation,
+        "medical_notes": req.medical_notes,
         "saliency_data": result["saliency"],
         "top_timesteps": result["top_timesteps"],
         "task": req.task,
@@ -222,7 +222,7 @@ def analyze_study(req: StudyAnalyzeRequest, doctor=Depends(get_current_doctor)):
     )
 
 
-# ---------- PREDICCIÓN SIN PERSISTENCIA (VISTA PREVIA) ----------
+# ---------- PREDICCIÓN SIN PERSISTENCIA ----------
 @app.post("/predict", response_model=PredictResponse)
 def predict_only(req: PredictRequest, doctor=Depends(get_current_doctor)):
     t0 = time.time()
@@ -247,6 +247,24 @@ def get_study(study_id: str, doctor=Depends(get_current_doctor)):
     if not res.data:
         raise HTTPException(404, "Estudio no encontrado")
     return res.data[0]
+
+
+# ---------- NUEVO: DESCARGAR LA SEÑAL ORIGINAL DEL STORAGE ----------
+@app.get("/studies/{study_id}/signal")
+def get_study_signal(study_id: str, doctor=Depends(get_current_doctor)):
+    res = supabase.table("studies").select("signal_file_path").eq("id", study_id).execute()
+    if not res.data:
+        raise HTTPException(404, "Estudio no encontrado")
+    
+    file_path = res.data[0]["signal_file_path"]
+    
+    try:
+        file_bytes = supabase.storage.from_("ecg-files").download(file_path)
+        buffer = io.BytesIO(file_bytes)
+        signal = np.load(buffer, allow_pickle=True)
+        return {"signal": signal.tolist()}
+    except Exception as e:
+        raise HTTPException(500, f"Error al descargar la señal: {str(e)}")
 
 
 # ---------- EXPLICACIÓN ASISTIDA (Borrador) ----------
@@ -295,18 +313,18 @@ def explain_study_by_id(study_id: str, doctor=Depends(get_current_doctor)):
     return ExplainResponse(explicacion=result["explicacion"], source=result["source"])
 
 
-# ---------- NUEVOS ENDPOINTS: EDICIÓN Y ANULACIÓN ----------
+# ---------- EDICIÓN Y ANULACIÓN ----------
 @app.patch("/studies/{study_id}")
 def update_study_validation(study_id: str, req: StudyUpdateRequest, doctor=Depends(get_current_doctor)):
     res = supabase.table("studies").select("*").eq("id", study_id).execute()
     if not res.data:
         raise HTTPException(404, "Estudio no encontrado")
-    
+
     supabase.table("studies").update({
         "medical_validation": req.medical_validation,
         "medical_notes": req.medical_notes
     }).eq("id", study_id).execute()
-    
+
     return {"status": "ok", "message": "Validación y notas actualizadas"}
 
 
@@ -315,10 +333,10 @@ def void_study(study_id: str, req: StudyVoidRequest, doctor=Depends(get_current_
     res = supabase.table("studies").select("*").eq("id", study_id).execute()
     if not res.data:
         raise HTTPException(404, "Estudio no encontrado")
-    
+
     supabase.table("studies").update({
         "medical_validation": "Anulado",
         "void_reason": req.void_reason
     }).eq("id", study_id).execute()
-    
+
     return {"status": "ok", "message": "Estudio anulado correctamente"}
