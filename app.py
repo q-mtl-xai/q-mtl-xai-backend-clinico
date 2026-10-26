@@ -50,7 +50,7 @@ CLASS_NAMES = {
 }
 
 # === App ===
-app = FastAPI(title="Q-MTL-XAI Clinical API", version="3.2.0")
+app = FastAPI(title="Q-MTL-XAI Clinical API", version="3.3.0") # Subimos versión por el nuevo endpoint
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -60,7 +60,6 @@ app.add_middleware(
 
 
 def _run_inference(signal, task, sampling_rate):
-    """Lógica de inferencia compartida. Devuelve dict con todo."""
     if task not in ["latido", "ventana", "isc"]:
         raise HTTPException(400, f"Tarea inválida: {task}")
 
@@ -192,7 +191,7 @@ def analyze_study(req: StudyAnalyzeRequest, doctor=Depends(get_current_doctor)):
     except Exception as e:
         print(f"[warn] Storage upload falló: {e}")
 
-    # Guardar registro en BD (incluye saliency + top_timesteps)
+    # Guardar registro en BD
     record = {
         "id": study_id,
         "patient_id": req.patient_id,
@@ -204,6 +203,7 @@ def analyze_study(req: StudyAnalyzeRequest, doctor=Depends(get_current_doctor)):
         "medical_validation": "Pendiente",
         "saliency_data": result["saliency"],
         "top_timesteps": result["top_timesteps"],
+        "task": req.task, 
     }
     supabase.table("studies").insert(record).execute()
 
@@ -217,13 +217,14 @@ def analyze_study(req: StudyAnalyzeRequest, doctor=Depends(get_current_doctor)):
         saliency=result["saliency"],
         top_timesteps=result["top_timesteps"],
         latency_ms=round(latency_ms, 2),
+        llm_explanation=None,
+        llm_source=None
     )
 
 
-# ---------- NUEVO: PREDICCIÓN SIN PERSISTENCIA (para sandbox) ----------
+# ---------- PREDICCIÓN SIN PERSISTENCIA (Sandbox) ----------
 @app.post("/predict", response_model=PredictResponse)
 def predict_only(req: PredictRequest, doctor=Depends(get_current_doctor)):
-    """Predice sin guardar nada en BD ni storage. Ideal para sandbox."""
     t0 = time.time()
     result = _run_inference(req.signal, req.task, req.sampling_rate)
     latency_ms = (time.time() - t0) * 1000
@@ -239,7 +240,7 @@ def predict_only(req: PredictRequest, doctor=Depends(get_current_doctor)):
     )
 
 
-# ---------- NUEVO: DETALLE DE UN ESTUDIO (con XAI) ----------
+# ---------- DETALLE DE UN ESTUDIO ----------
 @app.get("/studies/{study_id}")
 def get_study(study_id: str, doctor=Depends(get_current_doctor)):
     res = supabase.table("studies").select("*").eq("id", study_id).execute()
@@ -248,11 +249,52 @@ def get_study(study_id: str, doctor=Depends(get_current_doctor)):
     return res.data[0]
 
 
-# ---------- EXPLICACIÓN ASISTIDA ----------
+# ---------- EXPLICACIÓN ASISTIDA (Sandbox) ----------
 @app.post("/studies/explain", response_model=ExplainResponse)
 def explain_study(req: ExplainRequest, doctor=Depends(get_current_doctor)):
     result = explain_result(
         prediction=req.prediction, confidence=req.confidence,
         sqi=req.sqi, top_timesteps=req.top_timesteps, task=req.task,
     )
+    return ExplainResponse(explicacion=result["explicacion"], source=result["source"])
+
+
+# ---------- NUEVO: EXPLICACIÓN POR ID Y GUARDAR EN BD (Clínico) ----------
+@app.post("/studies/{study_id}/explain", response_model=ExplainResponse)
+def explain_study_by_id(study_id: str, doctor=Depends(get_current_doctor)):
+    # 1. Buscar el estudio en la BD
+    res = supabase.table("studies").select("*").eq("id", study_id).execute()
+    if not res.data:
+        raise HTTPException(404, "Estudio no encontrado")
+    
+    study = res.data[0]
+    
+    # 2. Si ya tiene explicación, la devolvemos sin gastar tokens
+    if study.get("llm_explanation"):
+        return ExplainResponse(
+            explicacion=study["llm_explanation"], 
+            source=study.get("llm_source", "llm")
+        )
+    
+    # 3. Blindaje contra estudios antiguos (NoneType)
+    top_ts = study.get("top_timesteps") or []
+    sqi_val = study.get("sqi_score") or "Fair"
+    conf_val = study.get("ai_confidence") or 0.0
+    task_val = study.get("task") or "isc"
+
+    # 4. Si no tiene, la generamos
+    result = explain_result(
+        prediction=study["ai_prediction"],
+        confidence=conf_val,
+        sqi=sqi_val,
+        top_timesteps=top_ts,
+        task=task_val
+    )
+    
+    # 5. La guardamos en la base de datos
+    supabase.table("studies").update({
+        "llm_explanation": result["explicacion"],
+        "llm_source": result["source"]
+    }).eq("id", study_id).execute()
+    
     return ExplainResponse(explicacion=result["explicacion"], source=result["source"])

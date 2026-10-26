@@ -45,6 +45,7 @@ class StudyAnalyzeRequest(BaseModel):
     sampling_rate: int = 250
 
 
+# Única definición de StudyResponse con los campos LLM integrados
 class StudyResponse(BaseModel):
     study_id: str
     patient_id: str
@@ -55,6 +56,8 @@ class StudyResponse(BaseModel):
     saliency: List[float]
     top_timesteps: List[int]
     latency_ms: float
+    llm_explanation: Optional[str] = None
+    llm_source: Optional[str] = None
 
 
 class ExplainRequest(BaseModel):
