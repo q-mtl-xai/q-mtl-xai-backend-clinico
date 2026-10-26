@@ -25,6 +25,7 @@ from schemas import (
     StudyAnalyzeRequest, StudyResponse,
     ExplainRequest, ExplainResponse,
     PredictRequest, PredictResponse,
+    StudyUpdateRequest, StudyVoidRequest # <-- IMPORTAMOS LOS NUEVOS
 )
 
 # === Config ===
@@ -50,7 +51,7 @@ CLASS_NAMES = {
 }
 
 # === App ===
-app = FastAPI(title="Q-MTL-XAI Clinical API", version="3.3.0") # Subimos versión por el nuevo endpoint
+app = FastAPI(title="Q-MTL-XAI Clinical API", version="3.4.0") # Subimos versión
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -170,14 +171,13 @@ def list_studies(patient_id: str, doctor=Depends(get_current_doctor)):
     return {"studies": res.data}
 
 
-# ---------- ANÁLISIS CON PERSISTENCIA ----------
+# ---------- ANÁLISIS CON PERSISTENCIA (GUARDADO FINAL) ----------
 @app.post("/studies/analyze", response_model=StudyResponse)
 def analyze_study(req: StudyAnalyzeRequest, doctor=Depends(get_current_doctor)):
     t0 = time.time()
     result = _run_inference(req.signal, req.task, req.sampling_rate)
     latency_ms = (time.time() - t0) * 1000
 
-    # Guardar señal en Supabase Storage
     study_id = str(uuid.uuid4())
     buf = io.BytesIO()
     np.save(buf, result["processed"])
@@ -191,7 +191,6 @@ def analyze_study(req: StudyAnalyzeRequest, doctor=Depends(get_current_doctor)):
     except Exception as e:
         print(f"[warn] Storage upload falló: {e}")
 
-    # Guardar registro en BD
     record = {
         "id": study_id,
         "patient_id": req.patient_id,
@@ -200,10 +199,11 @@ def analyze_study(req: StudyAnalyzeRequest, doctor=Depends(get_current_doctor)):
         "ai_prediction": result["prediction"],
         "ai_confidence": result["confidence"],
         "sqi_score": result["sqi"],
-        "medical_validation": "Pendiente",
+        "medical_validation": req.medical_validation, # <-- GUARDAMOS VALIDACIÓN
+        "medical_notes": req.medical_notes,           # <-- GUARDAMOS NOTAS
         "saliency_data": result["saliency"],
         "top_timesteps": result["top_timesteps"],
-        "task": req.task, 
+        "task": req.task,
     }
     supabase.table("studies").insert(record).execute()
 
@@ -222,7 +222,7 @@ def analyze_study(req: StudyAnalyzeRequest, doctor=Depends(get_current_doctor)):
     )
 
 
-# ---------- PREDICCIÓN SIN PERSISTENCIA (Sandbox) ----------
+# ---------- PREDICCIÓN SIN PERSISTENCIA (VISTA PREVIA) ----------
 @app.post("/predict", response_model=PredictResponse)
 def predict_only(req: PredictRequest, doctor=Depends(get_current_doctor)):
     t0 = time.time()
@@ -249,7 +249,7 @@ def get_study(study_id: str, doctor=Depends(get_current_doctor)):
     return res.data[0]
 
 
-# ---------- EXPLICACIÓN ASISTIDA (Sandbox) ----------
+# ---------- EXPLICACIÓN ASISTIDA (Borrador) ----------
 @app.post("/studies/explain", response_model=ExplainResponse)
 def explain_study(req: ExplainRequest, doctor=Depends(get_current_doctor)):
     result = explain_result(
@@ -259,30 +259,26 @@ def explain_study(req: ExplainRequest, doctor=Depends(get_current_doctor)):
     return ExplainResponse(explicacion=result["explicacion"], source=result["source"])
 
 
-# ---------- NUEVO: EXPLICACIÓN POR ID Y GUARDAR EN BD (Clínico) ----------
+# ---------- EXPLICACIÓN POR ID Y GUARDAR EN BD ----------
 @app.post("/studies/{study_id}/explain", response_model=ExplainResponse)
 def explain_study_by_id(study_id: str, doctor=Depends(get_current_doctor)):
-    # 1. Buscar el estudio en la BD
     res = supabase.table("studies").select("*").eq("id", study_id).execute()
     if not res.data:
         raise HTTPException(404, "Estudio no encontrado")
-    
+
     study = res.data[0]
-    
-    # 2. Si ya tiene explicación, la devolvemos sin gastar tokens
+
     if study.get("llm_explanation"):
         return ExplainResponse(
-            explicacion=study["llm_explanation"], 
+            explicacion=study["llm_explanation"],
             source=study.get("llm_source", "llm")
         )
-    
-    # 3. Blindaje contra estudios antiguos (NoneType)
+
     top_ts = study.get("top_timesteps") or []
     sqi_val = study.get("sqi_score") or "Fair"
     conf_val = study.get("ai_confidence") or 0.0
     task_val = study.get("task") or "isc"
 
-    # 4. Si no tiene, la generamos
     result = explain_result(
         prediction=study["ai_prediction"],
         confidence=conf_val,
@@ -290,11 +286,39 @@ def explain_study_by_id(study_id: str, doctor=Depends(get_current_doctor)):
         top_timesteps=top_ts,
         task=task_val
     )
-    
-    # 5. La guardamos en la base de datos
+
     supabase.table("studies").update({
         "llm_explanation": result["explicacion"],
         "llm_source": result["source"]
     }).eq("id", study_id).execute()
-    
+
     return ExplainResponse(explicacion=result["explicacion"], source=result["source"])
+
+
+# ---------- NUEVOS ENDPOINTS: EDICIÓN Y ANULACIÓN ----------
+@app.patch("/studies/{study_id}")
+def update_study_validation(study_id: str, req: StudyUpdateRequest, doctor=Depends(get_current_doctor)):
+    res = supabase.table("studies").select("*").eq("id", study_id).execute()
+    if not res.data:
+        raise HTTPException(404, "Estudio no encontrado")
+    
+    supabase.table("studies").update({
+        "medical_validation": req.medical_validation,
+        "medical_notes": req.medical_notes
+    }).eq("id", study_id).execute()
+    
+    return {"status": "ok", "message": "Validación y notas actualizadas"}
+
+
+@app.patch("/studies/{study_id}/void")
+def void_study(study_id: str, req: StudyVoidRequest, doctor=Depends(get_current_doctor)):
+    res = supabase.table("studies").select("*").eq("id", study_id).execute()
+    if not res.data:
+        raise HTTPException(404, "Estudio no encontrado")
+    
+    supabase.table("studies").update({
+        "medical_validation": "Anulado",
+        "void_reason": req.void_reason
+    }).eq("id", study_id).execute()
+    
+    return {"status": "ok", "message": "Estudio anulado correctamente"}

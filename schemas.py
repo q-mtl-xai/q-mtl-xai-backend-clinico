@@ -38,14 +38,16 @@ class PatientResponse(BaseModel):
     doctor_id: str
 
 
+# Actualizamos para recibir validación y notas al guardar desde el frontend
 class StudyAnalyzeRequest(BaseModel):
     patient_id: str
     signal: Union[List[float], List[List[float]]]
     task: str = "isc"
     sampling_rate: int = 250
+    medical_validation: Optional[str] = "Pendiente"
+    medical_notes: Optional[str] = ""
 
 
-# Única definición de StudyResponse con los campos LLM integrados
 class StudyResponse(BaseModel):
     study_id: str
     patient_id: str
@@ -73,7 +75,6 @@ class ExplainResponse(BaseModel):
     source: str
 
 
-# === NUEVO: predicción sin guardar (para sandbox) ===
 class PredictRequest(BaseModel):
     signal: Union[List[float], List[List[float]]]
     task: str = "isc"
@@ -88,3 +89,13 @@ class PredictResponse(BaseModel):
     saliency: List[float]
     top_timesteps: List[int]
     latency_ms: float
+
+
+# === NUEVOS ESQUEMAS PARA FASE 3 ===
+class StudyUpdateRequest(BaseModel):
+    medical_validation: str
+    medical_notes: Optional[str] = ""
+
+
+class StudyVoidRequest(BaseModel):
+    void_reason: str
