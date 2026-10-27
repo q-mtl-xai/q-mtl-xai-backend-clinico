@@ -74,7 +74,7 @@ def _run_inference(signal, task, sampling_rate):
     window_size = {"latido": 250, "ventana": 750, "isc": 2500}[task]
     processed = preprocess_ecg(sig, sampling_rate, 250, window_size=window_size)
     sqi_input = processed[0] if processed.ndim == 2 else processed
-    sqi = predict_sqi_ecg(sqi_input)
+    sqi = predict_sqi_ecg(sqi_input, is_2d=(processed.ndim == 2))
     xai_result = compute_saliency_dynamic(model, processed, task=task, device=DEVICE)
 
     probs = xai_result["probabilities"]

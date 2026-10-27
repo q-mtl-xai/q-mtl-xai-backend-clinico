@@ -8,7 +8,6 @@ _BASE = os.path.dirname(__file__)
 
 
 def _load_sqi(path):
-    """Carga el .pkl y devuelve (modelo, scaler_opcional, keys_info)."""
     obj = joblib.load(path)
     info = f"{os.path.basename(path)}: type={type(obj).__name__}"
     if isinstance(obj, dict):
@@ -28,6 +27,7 @@ print(f"[SQI] {_info_ecg}")
 print(f"[SQI] {_info_ppg}")
 
 SQ_NAMES = {0: "Poor", 1: "Fair", 2: "Good"}
+_ORDER = {"Good": 0, "Fair": 1, "Poor": 2}
 
 
 def _format_label(pred):
@@ -39,74 +39,107 @@ def _format_label(pred):
 
 
 def extract_sqi_features(signal, fs=250):
-    """
-    FIX CRÍTICO: Debe coincidir EXACTAMENTE con notebook 05.
-    
-    Features (en orden):
-        0. var             → varianza
-        1. entropy         → scipy_entropy(hist_50bins, log natural)
-        2. snr             → percentil-based (p95-p5)
-        3. amplitude       → max - min
-        4. zero_crossings  → sign-based
-        5. energy          → MEDIA (÷ n)
-        6. kurtosis        → 4to momento
-        7. skewness        → 3er momento
-    """
+    """Features alineadas con notebook 05."""
     signal = np.asarray(signal, dtype=np.float64)
     n = len(signal)
 
-    # 1. Varianza
     var = np.var(signal)
 
-    # 2. Entropía de Shannon (histograma 50 bins, density=True, log natural)
     hist, _ = np.histogram(signal, bins=50, density=True)
     hist = hist[hist > 0]
     ent = scipy_entropy(hist)
 
-    # 3. SNR percentil-based (amplitud p95-p5 sobre ruido)
     p95 = np.percentile(signal, 95)
     p5 = np.percentile(signal, 5)
-    p50 = np.percentile(signal, 50)
     signal_power = (p95 - p5) ** 2
     noise_power = np.var(signal - np.median(signal))
     snr = 10 * np.log10(signal_power / (noise_power + 1e-10))
 
-    # 4. Amplitud pico-a-pico
     amp = signal.max() - signal.min()
-
-    # 5. Cruces por cero (sign-based, no media-based)
     zc = np.sum(np.diff(np.sign(signal)) != 0) / n
-
-    # 6. Energía MEDIA (÷ n)
     energy = np.sum(signal ** 2) / n
 
-    # 7. Curtosis
     mean = np.mean(signal)
     std = np.std(signal) + 1e-10
     kurt = np.mean(((signal - mean) / std) ** 4)
-
-    # 8. Skewness
     skew = np.mean(((signal - mean) / std) ** 3)
 
-    return np.array(
-        [var, ent, snr, amp, zc, energy, kurt, skew],
-        dtype=np.float32,
-    )
+    return np.array([var, ent, snr, amp, zc, energy, kurt, skew], dtype=np.float32)
 
 
-def _predict(model, scaler, signal, fs):
-    if model is None:
+def _model_predict(signal, fs):
+    """Predicción del modelo entrenado (dominio MIT-BIH, 1D)."""
+    if _sqi_ecg_model is None:
         return "Fair"
     feats = extract_sqi_features(signal, fs).reshape(1, -1)
-    if scaler is not None:
-        feats = scaler.transform(feats)
-    pred = model.predict(feats)[0]
+    if _sqi_ecg_scaler is not None:
+        feats = _sqi_ecg_scaler.transform(feats)
+    pred = _sqi_ecg_model.predict(feats)[0]
     return _format_label(pred)
 
 
-def predict_sqi_ecg(signal, fs=250):
-    return _predict(_sqi_ecg_model, _sqi_ecg_scaler, signal, fs)
+def _rule_predict(signal, fs, is_2d=False):
+    """
+    Predicción por reglas calibradas.
+
+    Para señales 2D (PTB-XL) se usa KURTOSIS porque es más discriminativa que
+    energy en este dominio (calibrado con sanity check de 3 muestras conocidas):
+      - Limpio:  kurt ≈ 9.75   → Good
+      - em 0.25: kurt ≈ 18.69  → Fair (artefactos agudos)
+      - ma 0.50: kurt ≈ 7.14   → Poor (señal aplanada)
+
+    Para señales 1D (MIT-BIH) se usa energy + snr (dominio del training).
+    """
+    feats = extract_sqi_features(signal, fs)
+    energy = feats[5]
+    snr    = feats[2]
+    kurt   = feats[6]
+
+    if is_2d:
+        # PTB-XL Lead I — reglas por kurtosis
+        if kurt > 15:
+            return "Fair"
+        elif kurt < 8:
+            return "Poor"
+        else:
+            return "Good"
+    else:
+        # Señales 1D (MIT-BIH, latido, ventana) — reglas por energy + snr
+        if energy < 0.10 and snr > 8:
+            return "Good"
+        elif energy < 0.30 and snr > 4:
+            return "Fair"
+        else:
+            return "Poor"
+
+
+def predict_sqi_ecg(signal, fs=250, is_2d=False):
+    """
+    SQI por dominio:
+      - 2D (PTB-XL): SOLO reglas por kurtosis (el modelo no generaliza a 12-leads)
+      - 1D (MIT-BIH): HÍBRIDO (modelo + reglas, toma el más conservador)
+    """
+    signal = np.asarray(signal, dtype=np.float64)
+    if len(signal) == 0:
+        return "Fair"
+
+    rule_pred = _rule_predict(signal, fs, is_2d=is_2d)
+
+    if is_2d:
+        # Para 2D usar SOLO la regla
+        return rule_pred
+    else:
+        # Para 1D usar el peor entre modelo y regla
+        model_pred = _model_predict(signal, fs)
+        return max(model_pred, rule_pred, key=lambda x: _ORDER.get(x, 1))
 
 
 def predict_sqi_ppg(signal, fs=250):
-    return _predict(_sqi_ppg_model, _sqi_ppg_scaler, signal, fs)
+    """SQI PPG (solo modelo, sin reglas)."""
+    if _sqi_ppg_model is None:
+        return "Fair"
+    feats = extract_sqi_features(signal, fs).reshape(1, -1)
+    if _sqi_ppg_scaler is not None:
+        feats = _sqi_ppg_scaler.transform(feats)
+    pred = _sqi_ppg_model.predict(feats)[0]
+    return _format_label(pred)

@@ -2,7 +2,7 @@
 BACKEND CLÍNICO v3 — RESUMEN
 ======================================================================
 
-Fecha: 2026-10-27 17:14:53
+Fecha: 2026-10-27 17:52:27
 Supabase URL: https://osftrgvyrptsxtilgonw.supabase.co
 
 Endpoints implementados:
