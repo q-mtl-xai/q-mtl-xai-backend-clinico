@@ -2,6 +2,7 @@
 import numpy as np
 import joblib
 import os
+from scipy.stats import entropy as scipy_entropy
 
 _BASE = os.path.dirname(__file__)
 
@@ -38,25 +39,59 @@ def _format_label(pred):
 
 
 def extract_sqi_features(signal, fs=250):
-    x = np.asarray(signal, dtype=np.float32).flatten()
-    n = len(x)
-    mu, sigma = x.mean(), x.std() + 1e-8
-    var = float(np.var(x))
-    hist, _ = np.histogram(x, bins=10)
-    p = hist / (hist.sum() + 1e-8)
-    entropy = float(-np.sum(p[p > 0] * np.log2(p[p > 0])))
-    fft = np.abs(np.fft.rfft(x))
-    freqs = np.fft.rfftfreq(n, 1/fs)
-    band = (freqs >= 0.5) & (freqs <= 40)
-    p_band = np.sum(fft[band]**2)
-    p_total = np.sum(fft**2) + 1e-8
-    snr = float(10 * np.log10(p_band / (p_total - p_band + 1e-8) + 1e-8))
-    p2p = float(x.max() - x.min())
-    zc = float(np.sum((x[:-1] - mu) * (x[1:] - mu) < 0) / n)
-    energy = float(np.sum(x**2))
-    kurt = float(np.mean(((x - mu) / sigma) ** 4))
-    skew = float(np.mean(((x - mu) / sigma) ** 3))
-    return np.array([var, entropy, snr, p2p, zc, energy, kurt, skew], dtype=np.float32)
+    """
+    FIX CRÍTICO: Debe coincidir EXACTAMENTE con notebook 05.
+    
+    Features (en orden):
+        0. var             → varianza
+        1. entropy         → scipy_entropy(hist_50bins, log natural)
+        2. snr             → percentil-based (p95-p5)
+        3. amplitude       → max - min
+        4. zero_crossings  → sign-based
+        5. energy          → MEDIA (÷ n)
+        6. kurtosis        → 4to momento
+        7. skewness        → 3er momento
+    """
+    signal = np.asarray(signal, dtype=np.float64)
+    n = len(signal)
+
+    # 1. Varianza
+    var = np.var(signal)
+
+    # 2. Entropía de Shannon (histograma 50 bins, density=True, log natural)
+    hist, _ = np.histogram(signal, bins=50, density=True)
+    hist = hist[hist > 0]
+    ent = scipy_entropy(hist)
+
+    # 3. SNR percentil-based (amplitud p95-p5 sobre ruido)
+    p95 = np.percentile(signal, 95)
+    p5 = np.percentile(signal, 5)
+    p50 = np.percentile(signal, 50)
+    signal_power = (p95 - p5) ** 2
+    noise_power = np.var(signal - np.median(signal))
+    snr = 10 * np.log10(signal_power / (noise_power + 1e-10))
+
+    # 4. Amplitud pico-a-pico
+    amp = signal.max() - signal.min()
+
+    # 5. Cruces por cero (sign-based, no media-based)
+    zc = np.sum(np.diff(np.sign(signal)) != 0) / n
+
+    # 6. Energía MEDIA (÷ n)
+    energy = np.sum(signal ** 2) / n
+
+    # 7. Curtosis
+    mean = np.mean(signal)
+    std = np.std(signal) + 1e-10
+    kurt = np.mean(((signal - mean) / std) ** 4)
+
+    # 8. Skewness
+    skew = np.mean(((signal - mean) / std) ** 3)
+
+    return np.array(
+        [var, ent, snr, amp, zc, energy, kurt, skew],
+        dtype=np.float32,
+    )
 
 
 def _predict(model, scaler, signal, fs):

@@ -255,9 +255,9 @@ def get_study_signal(study_id: str, doctor=Depends(get_current_doctor)):
     res = supabase.table("studies").select("signal_file_path").eq("id", study_id).execute()
     if not res.data:
         raise HTTPException(404, "Estudio no encontrado")
-    
+
     file_path = res.data[0]["signal_file_path"]
-    
+
     try:
         file_bytes = supabase.storage.from_("ecg-files").download(file_path)
         buffer = io.BytesIO(file_bytes)
